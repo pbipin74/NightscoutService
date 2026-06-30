@@ -559,7 +559,25 @@ extension KeychainManager {
 
         return (siteURL: credentials.url, apiSecret: credentials.password)
     }
+    func setSecondaryNightscoutCredentials(siteURL: URL? = nil, apiSecret: String? = nil) throws {
+        let credentials: InternetCredentials?
+
+        if let siteURL = siteURL, let apiSecret = apiSecret {
+            credentials = InternetCredentials(username: SecondaryNightscoutAPIAccount, password: apiSecret, url: siteURL)
+        } else {
+            credentials = nil
+        }
+
+        try replaceInternetCredentials(credentials, forAccount: SecondaryNightscoutAPIAccount)
+    }
+
+    func getSecondaryNightscoutCredentials() throws -> (siteURL: URL, apiSecret: String) {
+        let credentials = try getInternetCredentials(account: SecondaryNightscoutAPIAccount)
+
+        return (siteURL: credentials.url, apiSecret: credentials.password)
+    }
 
 }
 
 fileprivate let NightscoutAPIAccount = "NightscoutAPI"
+fileprivate let SecondaryNightscoutAPIAccount = "SecondaryNightscoutAPI"
