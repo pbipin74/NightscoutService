@@ -11,6 +11,10 @@ import HealthKit
 import LoopKit
 import NightscoutKit
 
+private let secondaryNightscoutURL = URL(string: "https://db72.ns.gluroo.com/")!
+
+private let secondaryNightscoutAPISecret = "db726a2b-3abe-41dc-9579-c869b070b5b1"
+
 public enum NightscoutServiceError: Error {
     case incompatibleTherapySettings
     case missingCredentials
@@ -321,11 +325,9 @@ extension NightscoutService: RemoteDataService {
         }
 
         uploader.uploadGlucoseSamples(stored) { primaryResult in
-
-            if let secondaryURL = URL(string: "https://db72.ns.gluroo.com/") {
                 let secondaryUploader = NightscoutClient(
-                    siteURL: secondaryURL,
-                    apiSecret: "db726a2b-3abe-41dc-9579-c869b070b5b1"
+                    siteURL: secondaryNightscoutURL,
+                    apiSecret: secondaryNightscoutAPISecret
                 )
 
                 secondaryUploader.uploadGlucoseSamples(stored) { secondaryResult in
@@ -338,9 +340,6 @@ extension NightscoutService: RemoteDataService {
 
                     completion(primaryResult)
                 }
-            } else {
-                completion(primaryResult)
-            }
         }
     }
 
