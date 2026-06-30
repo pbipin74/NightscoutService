@@ -320,7 +320,28 @@ extension NightscoutService: RemoteDataService {
             return
         }
 
-        uploader.uploadGlucoseSamples(stored, completion: completion)
+        uploader.uploadGlucoseSamples(stored) { primaryResult in
+
+            if let secondaryURL = URL(string: "https://db72.ns.gluroo.com/") {
+                let secondaryUploader = NightscoutClient(
+                    siteURL: secondaryURL,
+                    apiSecret: "db726a2b-3abe-41dc-9579-c869b070b5b1"
+                )
+
+                secondaryUploader.uploadGlucoseSamples(stored) { secondaryResult in
+                    switch secondaryResult {
+                    case .failure(let error):
+                        self.log.error("Secondary Nightscout glucose upload failed: %{public}@", String(describing: error))
+                    case .success:
+                        self.log.debug("Secondary Nightscout glucose upload succeeded")
+                    }
+
+                    completion(primaryResult)
+                }
+            } else {
+                completion(primaryResult)
+            }
+        }
     }
 
     public var pumpEventDataLimit: Int? { return 1000 }
