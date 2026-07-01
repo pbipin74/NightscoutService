@@ -16,7 +16,11 @@ struct CredentialsView: View, HorizontalSizeClassOverride {
     
     @State var url: String
     @State var apiSecret: String
-    
+
+    @State var enableSecondary = false
+    @State var secondaryUrl = ""
+    @State var secondaryApiSecret = ""
+
     var allowCancel: Bool
     
     var body: some View {
@@ -39,12 +43,33 @@ struct CredentialsView: View, HorizontalSizeClassOverride {
                 .padding()
                 .background(Color(.secondarySystemBackground))
                 .cornerRadius(5.0)
-            
+            Toggle("Enable Secondary Nightscout", isOn: $enableSecondary)
+                .padding(.top)
             if self.viewModel.error != nil {
                 Text(String(describing: self.viewModel.error!))
             }
+            if enableSecondary {
+                TextField("Secondary Site URL", text: $secondaryUrl)
+                    .keyboardType(.URL)
+                    .autocapitalization(.none)
+                    .padding()
+                    .background(Color(.secondarySystemBackground))
+                    .cornerRadius(5.0)
 
-            Button(action: { self.viewModel.attemptAuth(urlString: self.url, apiSecret: self.apiSecret) } ) {
+                SecureField("Secondary API Secret", text: $secondaryApiSecret)
+                    .padding()
+                    .background(Color(.secondarySystemBackground))
+                    .cornerRadius(5.0)
+            }
+
+            Button(action: {
+                self.viewModel.attemptAuth(
+                    urlString: self.url,
+                    apiSecret: self.apiSecret,
+                    secondaryUrlString: enableSecondary ? secondaryUrl : nil,
+                    secondaryApiSecret: enableSecondary ? secondaryApiSecret : nil
+                )
+            }) {
                 if self.viewModel.isVerifying {
                     ActivityIndicator(isAnimating: .constant(true), style: .medium)
                 } else {

@@ -16,6 +16,9 @@ struct ServiceStatusView: View, HorizontalSizeClassOverride {
     @ObservedObject var viewModel: ServiceStatusViewModel
     @ObservedObject var otpViewModel: OTPViewModel
     @State private var selectedItem: String?
+    @State private var secondaryUrl = ""
+    @State private var secondaryApiSecret = ""
+    @State private var changeSecondaryApiSecret = false
     var body: some View {
         VStack {
             Text("Nightscout")
@@ -28,6 +31,12 @@ struct ServiceStatusView: View, HorizontalSizeClassOverride {
             
 
             VStack(spacing: 0) {
+                VStack(alignment: .leading) {
+                    Text("Primary Nightscout")
+                        .font(.headline)
+                        .padding()
+                }
+                Divider()
                 HStack {
                     Text("URL")
                     Spacer()
@@ -52,6 +61,52 @@ struct ServiceStatusView: View, HorizontalSizeClassOverride {
                     }
                 }.foregroundColor(Color.primary)
                 .padding()
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Secondary Nightscout")
+                        .font(.headline)
+
+                    TextField("Secondary URL", text: $secondaryUrl)
+                        .keyboardType(.URL)
+                        .autocapitalization(.none)
+                        .padding()
+                        .background(Color(.tertiarySystemBackground))
+                        .cornerRadius(5.0)
+
+                    if viewModel.secondaryStatusString == "Configured" && !changeSecondaryApiSecret {
+                        HStack {
+                            Text("Secondary API Secret")
+                            Spacer()
+                            Text("********")
+                                .foregroundColor(.secondary)
+                            Button("Change") {
+                                changeSecondaryApiSecret = true
+                                secondaryApiSecret = ""
+                            }
+                        }
+                    } else {
+                        SecureField("Secondary API Secret", text: $secondaryApiSecret)
+                            .padding()
+                            .background(Color(.tertiarySystemBackground))
+                            .cornerRadius(5)
+                    }
+
+                    Button("Save Secondary Nightscout") {
+                        viewModel.saveSecondaryNightscout(
+                            urlString: secondaryUrl,
+                            apiSecret: secondaryApiSecret
+                        )
+                    }
+                    .buttonStyle(ActionButtonStyle(.secondary))
+
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        Text(viewModel.secondaryStatusString)
+                    }
+                }
+                .padding()
             }
             .background(Color(UIColor.secondarySystemBackground))
             .cornerRadius(10)
@@ -63,6 +118,11 @@ struct ServiceStatusView: View, HorizontalSizeClassOverride {
             }
         }
         .padding([.leading, .trailing])
+        .onAppear {
+            if secondaryUrl.isEmpty {
+                secondaryUrl = viewModel.secondaryUrlString == "Not Configured" ? "" : viewModel.secondaryUrlString
+            }
+        }
         .navigationBarTitle("")
         .navigationBarItems(trailing: dismissButton)
     }

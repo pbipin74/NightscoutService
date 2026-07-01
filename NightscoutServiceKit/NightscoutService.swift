@@ -34,6 +34,10 @@ public final class NightscoutService: Service {
 
     public var apiSecret: String?
     
+    public var secondarySiteURL: URL?
+
+    public var secondaryApiSecret: String?
+    
     public var isOnboarded: Bool
 
     public let otpManager: OTPManager
@@ -60,7 +64,35 @@ public final class NightscoutService: Service {
         }
         return _uploader
     }
-    
+    private var secondaryUploader: NightscoutClient? {
+        guard let secondarySiteURL = secondarySiteURL,
+              let secondaryApiSecret = secondaryApiSecret,
+              !secondaryApiSecret.isEmpty else {
+            return nil
+        }
+
+        return NightscoutClient(
+            siteURL: secondarySiteURL,
+            apiSecret: secondaryApiSecret
+        )
+    }
+    private func uploadToSecondary<T>(
+        context: String,
+        upload: @escaping (NightscoutClient, @escaping (Result<T, Error>) -> Void) -> Void
+    ) {
+        guard let secondaryUploader = secondaryUploader else {
+            return
+        }
+
+        upload(secondaryUploader) { result in
+            switch result {
+            case .failure(let error):
+                self.log.error("Secondary Nightscout upload failed for %{public}@: %{public}@", context, String(describing: error))
+            case .success:
+                self.log.debug("Secondary Nightscout upload succeeded for %{public}@", context)
+            }
+        }
+    }
     private let commandSourceV1: RemoteCommandSourceV1
 
     private let log = OSLog(category: "NightscoutService")
@@ -134,16 +166,38 @@ public final class NightscoutService: Service {
     }
 
     private func saveCredentials() {
-        try? KeychainManager().setNightscoutCredentials(siteURL: siteURL, apiSecret: apiSecret)
+        let keychainManager = KeychainManager()
+        try? keychainManager.setNightscoutCredentials(siteURL: siteURL, apiSecret: apiSecret)
+        try? keychainManager.setSecondaryNightscoutCredentials(siteURL: secondarySiteURL, apiSecret: secondaryApiSecret)
     }
 
     public func restoreCredentials() {
-        if let credentials = try? KeychainManager().getNightscoutCredentials() {
+        let keychainManager = KeychainManager()
+
+        if let credentials = try? keychainManager.getNightscoutCredentials() {
             self.siteURL = credentials.siteURL
             self.apiSecret = credentials.apiSecret
         }
-    }
 
+        if let secondaryCredentials = try? keychainManager.getSecondaryNightscoutCredentials() {
+            self.secondarySiteURL = secondaryCredentials.siteURL
+            self.secondaryApiSecret = secondaryCredentials.apiSecret
+        }
+    }
+    public func updateSecondaryNightscoutCredentials(urlString: String, apiSecret: String) throws {
+        if urlString.isEmpty || apiSecret.isEmpty {
+            secondarySiteURL = nil
+            secondaryApiSecret = nil
+        } else if let url = URL(string: urlString) {
+            secondarySiteURL = url
+            secondaryApiSecret = apiSecret
+        } else {
+            throw NightscoutServiceError.missingCredentials
+        }
+
+        saveCredentials()
+        stateDelegate?.pluginDidUpdateState(self)
+    }
     public func clearCredentials() {
         siteURL = nil
         apiSecret = nil
@@ -165,6 +219,15 @@ extension NightscoutService: RemoteDataService {
         let deletions = deleted.map { $0.syncIdentifier.uuidString }
 
         uploader.deleteTreatmentsById(deletions, completionHandler: { (error) in
+            if let secondaryUploader = self.secondaryUploader {
+                secondaryUploader.deleteTreatmentsById(deletions) { secondaryError in
+                    if let secondaryError = secondaryError {
+                        self.log.error("Secondary Nightscout override deletions failed: %{public}@", String(describing: secondaryError))
+                    } else {
+                        self.log.debug("Secondary Nightscout override deletions succeeded")
+                    }
+                }
+            }
             if let error = error {
                 self.log.error("Overrides deletions failed to delete %{public}@: %{public}@", String(describing: deletions), String(describing: error))
             } else {
@@ -172,6 +235,16 @@ extension NightscoutService: RemoteDataService {
                     self.log.debug("Deleted ids: %@", deletions)
                 }
                 uploader.upload(updates) { (result) in
+                    if let secondaryUploader = self.secondaryUploader {
+                        secondaryUploader.upload(updates) { secondaryResult in
+                            switch secondaryResult {
+                            case .failure(let error):
+                                self.log.error("Secondary Nightscout overrides upload failed: %{public}@", String(describing: error))
+                            case .success:
+                                self.log.debug("Secondary Nightscout overrides upload succeeded")
+                            }
+                        }
+                    }
                     switch result {
                     case .failure(let error):
                         self.log.error("Failed to upload overrides %{public}@: %{public}@", String(describing: updates.map {$0.dictionaryRepresentation}), String(describing: error))
@@ -201,6 +274,16 @@ extension NightscoutService: RemoteDataService {
         }
         
         uploader.createCarbData(created) { result in
+            if let secondaryUploader = self.secondaryUploader {
+                secondaryUploader.createCarbData(created) { secondaryResult in
+                    switch secondaryResult {
+                    case .failure(let error):
+                        self.log.error("Secondary Nightscout carbs-create upload failed: %{public}@", String(describing: error))
+                    case .success:
+                        self.log.debug("Secondary Nightscout carbs-create upload succeeded")
+                    }
+                }
+            }
             switch result {
             case .failure(let error):
                 completion(.failure(error))
@@ -215,11 +298,31 @@ extension NightscoutService: RemoteDataService {
                 self.stateDelegate?.pluginDidUpdateState(self)
                 
                 uploader.updateCarbData(updated, usingObjectIdCache: self.objectIdCache) { result in
+                    if let secondaryUploader = self.secondaryUploader {
+                        secondaryUploader.updateCarbData(updated, usingObjectIdCache: self.objectIdCache) { secondaryResult in
+                            switch secondaryResult {
+                            case .failure(let error):
+                                self.log.error("Secondary Nightscout carbs-update upload failed: %{public}@", String(describing: error))
+                            case .success:
+                                self.log.debug("Secondary Nightscout carbs-update upload succeeded")
+                            }
+                        }
+                    }
                     switch result {
                     case .failure(let error):
                         completion(.failure(error))
                     case .success(let updatedUploaded):
                         uploader.deleteCarbData(deleted, usingObjectIdCache: self.objectIdCache) { result in
+                            if let secondaryUploader = self.secondaryUploader {
+                                secondaryUploader.deleteCarbData(deleted, usingObjectIdCache: self.objectIdCache) { secondaryResult in
+                                    switch secondaryResult {
+                                    case .failure(let error):
+                                        self.log.error("Secondary Nightscout carbs-delete upload failed: %{public}@", String(describing: error))
+                                    case .success:
+                                        self.log.debug("Secondary Nightscout carbs-delete upload succeeded")
+                                    }
+                                }
+                            }
                             switch result {
                             case .failure(let error):
                                 completion(.failure(error))
@@ -244,6 +347,16 @@ extension NightscoutService: RemoteDataService {
         }
 
         uploader.createDoses(created, usingObjectIdCache: self.objectIdCache) { (result) in
+            if let secondaryUploader = self.secondaryUploader {
+                secondaryUploader.createDoses(created, usingObjectIdCache: self.objectIdCache) { secondaryResult in
+                    switch secondaryResult {
+                    case .failure(let error):
+                        self.log.error("Secondary Nightscout dose-create upload failed: %{public}@", String(describing: error))
+                    case .success:
+                        self.log.debug("Secondary Nightscout dose-create upload succeeded")
+                    }
+                }
+            }
             switch (result) {
             case .failure(let error):
                 completion(.failure(error))
@@ -258,6 +371,16 @@ extension NightscoutService: RemoteDataService {
                 self.stateDelegate?.pluginDidUpdateState(self)
 
                 uploader.deleteDoses(deleted.filter { !$0.isMutable }, usingObjectIdCache: self.objectIdCache) { result in
+                    if let secondaryUploader = self.secondaryUploader {
+                        secondaryUploader.deleteDoses(deleted.filter { !$0.isMutable }, usingObjectIdCache: self.objectIdCache) { secondaryResult in
+                            switch secondaryResult {
+                            case .failure(let error):
+                                self.log.error("Secondary Nightscout dose-delete upload failed: %{public}@", String(describing: error))
+                            case .success:
+                                self.log.debug("Secondary Nightscout dose-delete upload succeeded")
+                            }
+                        }
+                    }
                     switch result {
                     case .failure(let error):
                         completion(.failure(error))
@@ -302,6 +425,16 @@ extension NightscoutService: RemoteDataService {
         }
 
         uploader.uploadDeviceStatuses(statuses) { result in
+            if let secondaryUploader = self.secondaryUploader {
+                secondaryUploader.uploadDeviceStatuses(statuses) { secondaryResult in
+                    switch secondaryResult {
+                    case .failure(let error):
+                        self.log.error("Secondary Nightscout device-status upload failed: %{public}@", String(describing: error))
+                    case .success:
+                        self.log.debug("Secondary Nightscout device-status upload succeeded")
+                    }
+                }
+            }
             switch result {
             case .success:
                 self.lastDosingDecisionForAutomaticDose = nil
@@ -320,7 +453,13 @@ extension NightscoutService: RemoteDataService {
             return
         }
 
-        uploader.uploadGlucoseSamples(stored, completion: completion)
+        uploader.uploadGlucoseSamples(stored) { primaryResult in
+            self.uploadToSecondary(context: "glucose") { secondaryUploader, secondaryCompletion in
+                secondaryUploader.uploadGlucoseSamples(stored, completion: secondaryCompletion)
+            }
+
+            completion(primaryResult)
+        }
     }
 
     public var pumpEventDataLimit: Int? { return 1000 }
@@ -343,6 +482,16 @@ extension NightscoutService: RemoteDataService {
         }
 
         uploader.upload(treatments) { (result) in
+            if let secondaryUploader = self.secondaryUploader {
+                secondaryUploader.upload(treatments) { secondaryResult in
+                    switch secondaryResult {
+                    case .failure(let error):
+                        self.log.error("Secondary Nightscout pump-events upload failed: %{public}@", String(describing: error))
+                    case .success:
+                        self.log.debug("Secondary Nightscout pump-events upload succeeded")
+                    }
+                }
+            }
             switch result {
             case .failure(let error):
                 self.log.error("Failed to upload pump events %{public}@: %{public}@", String(describing: treatments.map {$0.dictionaryRepresentation}), String(describing: error))
@@ -364,7 +513,20 @@ extension NightscoutService: RemoteDataService {
             return
         }
 
-        uploader.uploadProfiles(stored.compactMap { $0.profileSet }, completion: completion)
+        let profiles = stored.compactMap { $0.profileSet }
+
+        if let secondaryUploader = self.secondaryUploader {
+            secondaryUploader.uploadProfiles(profiles) { secondaryResult in
+                switch secondaryResult {
+                case .failure(let error):
+                    self.log.error("Secondary Nightscout profiles upload failed: %{public}@", String(describing: error))
+                case .success:
+                    self.log.debug("Secondary Nightscout profiles upload succeeded")
+                }
+            }
+        }
+
+        uploader.uploadProfiles(profiles, completion: completion)
     }
     
     public func fetchStoredTherapySettings(completion: @escaping (Result<(TherapySettings,Date), Error>) -> Void) {
@@ -392,6 +554,17 @@ extension NightscoutService: RemoteDataService {
         guard hasConfiguration, let uploader = uploader else {
             completion(.success(true))
             return
+        }
+
+        if let secondaryUploader = self.secondaryUploader {
+            secondaryUploader.uploadCgmEvents(stored) { secondaryResult in
+                switch secondaryResult {
+                case .failure(let error):
+                    self.log.error("Secondary Nightscout CGM-events upload failed: %{public}@", String(describing: error))
+                case .success:
+                    self.log.debug("Secondary Nightscout CGM-events upload succeeded")
+                }
+            }
         }
 
         uploader.uploadCgmEvents(stored, completion: completion)
@@ -539,7 +712,25 @@ extension KeychainManager {
 
         return (siteURL: credentials.url, apiSecret: credentials.password)
     }
+    func setSecondaryNightscoutCredentials(siteURL: URL? = nil, apiSecret: String? = nil) throws {
+        let credentials: InternetCredentials?
+
+        if let siteURL = siteURL, let apiSecret = apiSecret {
+            credentials = InternetCredentials(username: SecondaryNightscoutAPIAccount, password: apiSecret, url: siteURL)
+        } else {
+            credentials = nil
+        }
+
+        try replaceInternetCredentials(credentials, forAccount: SecondaryNightscoutAPIAccount)
+    }
+
+    func getSecondaryNightscoutCredentials() throws -> (siteURL: URL, apiSecret: String) {
+        let credentials = try getInternetCredentials(account: SecondaryNightscoutAPIAccount)
+
+        return (siteURL: credentials.url, apiSecret: credentials.password)
+    }
 
 }
 
 fileprivate let NightscoutAPIAccount = "NightscoutAPI"
+fileprivate let SecondaryNightscoutAPIAccount = "SecondaryNightscoutAPI"

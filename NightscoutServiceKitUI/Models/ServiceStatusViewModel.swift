@@ -13,7 +13,10 @@ import LoopKit
 
 protocol ServiceStatusViewModelDelegate {
     func verifyConfiguration(completion: @escaping (Error?) -> Void)
+    func updateSecondaryNightscoutCredentials(urlString: String, apiSecret: String) throws
     var siteURL: URL? { get }
+    var secondarySiteURL: URL? { get }
+    var secondaryApiSecret: String? { get }
 }
 
 enum ServiceStatus {
@@ -45,6 +48,25 @@ class ServiceStatusViewModel: ObservableObject {
         return delegate.siteURL?.absoluteString ?? LocalizedString("Not Available", comment: "Error when nightscout service url is not set")
     }
 
+    var secondaryUrlString: String {
+        return delegate.secondarySiteURL?.absoluteString ?? LocalizedString("Not Configured", comment: "Secondary Nightscout URL is not configured")
+    }
+
+    var secondaryStatusString: String {
+        if delegate.secondarySiteURL != nil && delegate.secondaryApiSecret?.isEmpty == false {
+            return LocalizedString("Configured", comment: "Secondary Nightscout is configured")
+        } else {
+            return LocalizedString("Off", comment: "Secondary Nightscout is disabled")
+        }
+    }
+    func saveSecondaryNightscout(urlString: String, apiSecret: String) {
+        do {
+            try delegate.updateSecondaryNightscoutCredentials(urlString: urlString, apiSecret: apiSecret)
+            objectWillChange.send()
+        } catch {
+            self.status = .error(error)
+        }
+    }
     init(delegate: ServiceStatusViewModelDelegate) {
         self.delegate = delegate
         
